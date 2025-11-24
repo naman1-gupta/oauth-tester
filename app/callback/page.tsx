@@ -38,18 +38,31 @@ function CallbackContent() {
 
       try {
         const config = JSON.parse(storedConfig);
+        
+        const payload: any = {
+          code,
+          client_id: config.clientId,
+          redirect_uri: config.redirectUri,
+          token_endpoint: config.tokenEndpoint,
+        };
+
+        if (config.authMethod === "pkce") {
+          if (!config.codeVerifier) {
+            throw new Error("PKCE flow selected but no code_verifier found");
+          }
+          payload.code_verifier = config.codeVerifier;
+        }
+        
+        if (config.clientSecret) {
+          payload.client_secret = config.clientSecret;
+        }
+
         const response = await fetch("/api/auth/exchange", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            code,
-            client_id: config.clientId,
-            client_secret: config.clientSecret,
-            redirect_uri: config.redirectUri,
-            token_endpoint: config.tokenEndpoint,
-          }),
+          body: JSON.stringify(payload),
         });
 
         const data = await response.json();

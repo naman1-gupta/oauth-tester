@@ -3,11 +3,20 @@ import { NextResponse } from "next/server";
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { code, client_id, client_secret, redirect_uri, token_endpoint } = body;
+        const { code, client_id, client_secret, redirect_uri, token_endpoint, code_verifier } = body;
 
-        if (!code || !client_id || !client_secret || !redirect_uri || !token_endpoint) {
+        // Validate required parameters
+        // client_secret is optional if code_verifier is present (PKCE)
+        if (!code || !client_id || !redirect_uri || !token_endpoint) {
             return NextResponse.json(
                 { error: "Missing required parameters" },
+                { status: 400 }
+            );
+        }
+
+        if (!client_secret && !code_verifier) {
+            return NextResponse.json(
+                { error: "Either client_secret or code_verifier is required" },
                 { status: 400 }
             );
         }
@@ -16,8 +25,15 @@ export async function POST(request: Request) {
         params.append("grant_type", "authorization_code");
         params.append("code", code);
         params.append("client_id", client_id);
-        params.append("client_secret", client_secret);
         params.append("redirect_uri", redirect_uri);
+
+        if (client_secret) {
+            params.append("client_secret", client_secret);
+        }
+
+        if (code_verifier) {
+            params.append("code_verifier", code_verifier);
+        }
 
         const response = await fetch(token_endpoint, {
             method: "POST",

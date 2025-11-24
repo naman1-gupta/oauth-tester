@@ -1,7 +1,32 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Shield, Key, Link as LinkIcon, Globe, Lock, ArrowRight } from "lucide-react";
+import { Shield, Key, Link as LinkIcon, Globe, Lock, ArrowRight, Settings2 } from "lucide-react";
+
+// PKCE Helper Functions
+function generateCodeVerifier() {
+  const array = new Uint8Array(32);
+  window.crypto.getRandomValues(array);
+  return Array.from(array, (byte) => ("0" + byte.toString(16)).slice(-2)).join("");
+}
+
+async function generateCodeChallenge(verifier: string) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(verifier);
+  const digest = await window.crypto.subtle.digest("SHA-256", data);
+  
+  // Convert buffer to base64url
+  const bytes = new Uint8Array(digest);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
 
 export default function Home() {
   const [config, setConfig] = useState({
@@ -11,6 +36,7 @@ export default function Home() {
     clientSecret: "",
     scopes: "openid profile email",
     redirectUri: "",
+    authMethod: "client_secret" as "client_secret" | "pkce",
   });
 
   useEffect(() => {
@@ -26,6 +52,8 @@ export default function Home() {
             // The user might want to customize it, but usually it's fixed. 
             // Let's respect what was saved, but default to current origin if not saved or empty.
             redirectUri: parsed.redirectUri || `${window.location.origin}/callback`,
+            // Default to client_secret if not present (backward compatibility)
+            authMethod: parsed.authMethod || "client_secret",
           }));
         } catch (e) {
           console.error("Failed to parse stored config", e);
@@ -39,8 +67,16 @@ export default function Home() {
     }
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    let codeChallenge = "";
+    let codeVerifier = "";
+
+    if (config.authMethod === "pkce") {
+      codeVerifier = generateCodeVerifier();
+      codeChallenge = await generateCodeChallenge(codeVerifier);
+    }
     
     // Construct the authorization URL
     const params = new URLSearchParams({
@@ -50,8 +86,18 @@ export default function Home() {
       scope: config.scopes,
     });
 
+    if (config.authMethod === "pkce") {
+      params.append("code_challenge", codeChallenge);
+      params.append("code_challenge_method", "S256");
+    }
+
     // Store config in localStorage to retrieve it in the callback
-    localStorage.setItem("oauth_config", JSON.stringify(config));
+    // We also store the code_verifier if using PKCE
+    const configToStore = {
+      ...config,
+      codeVerifier: config.authMethod === "pkce" ? codeVerifier : undefined,
+    };
+    localStorage.setItem("oauth_config", JSON.stringify(configToStore));
 
     const authUrl = `${config.authEndpoint}?${params.toString()}`;
     window.location.href = authUrl;
@@ -72,6 +118,52 @@ export default function Home() {
 
         <div className="bg-secondary/30 border border-border rounded-xl p-8 backdrop-blur-sm shadow-xl">
           <form onSubmit={handleSubmit} className="space-y-6">
+            
+            {/* Auth Method Selection */}
+            <div className="space-y-3">
+              <label className="text-sm font-medium flex items-center gap-2">
+                <Settings2 className="w-4 h-4 text-muted-foreground" />
+                Authentication Method
+              </label>
+              <div className="grid grid-cols-2 gap-4">
+                <label className={`
+                  flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                  ${config.authMethod === 'client_secret' 
+                    ? 'bg-primary/10 border-primary text-primary' 
+                    : 'bg-background/50 border-input hover:bg-background/80'}
+                `}>
+                  <input
+                    type="radio"
+                    name="authMethod"
+                    value="client_secret"
+                    checked={config.authMethod === 'client_secret'}
+                    onChange={(e) => setConfig({ ...config, authMethod: "client_secret" })}
+                    className="hidden"
+                  />
+                  <Key className="w-4 h-4" />
+                  <span className="font-medium">Client Secret</span>
+                </label>
+                
+                <label className={`
+                  flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                  ${config.authMethod === 'pkce' 
+                    ? 'bg-primary/10 border-primary text-primary' 
+                    : 'bg-background/50 border-input hover:bg-background/80'}
+                `}>
+                  <input
+                    type="radio"
+                    name="authMethod"
+                    value="pkce"
+                    checked={config.authMethod === 'pkce'}
+                    onChange={(e) => setConfig({ ...config, authMethod: "pkce" })}
+                    className="hidden"
+                  />
+                  <Shield className="w-4 h-4" />
+                  <span className="font-medium">PKCE</span>
+                </label>
+              </div>
+            </div>
+
             <div className="grid gap-6 md:grid-cols-2">
               <div className="space-y-2">
                 <label className="text-sm font-medium flex items-center gap-2">
@@ -119,14 +211,14 @@ export default function Home() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium flex items-center gap-2">
+                <label className="text-sm font-medium flex items-center gap-2 whitespace-nowrap">
                   <Lock className="w-4 h-4 text-muted-foreground" />
-                  Client Secret
+                  Client Secret {config.authMethod === 'pkce' && <span className="text-muted-foreground font-normal text-xs ml-auto">(Optional)</span>}
                 </label>
                 <input
-                  required
+                  required={config.authMethod === 'client_secret'}
                   type="password"
-                  placeholder="client_secret"
+                  placeholder={config.authMethod === 'pkce' ? "leave empty for public clients" : "client_secret"}
                   className="w-full bg-background/50 border border-input rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-all"
                   value={config.clientSecret}
                   onChange={(e) => setConfig({ ...config, clientSecret: e.target.value })}
